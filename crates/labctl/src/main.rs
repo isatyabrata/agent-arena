@@ -192,10 +192,14 @@ fn setup_claude(kv: &HashMap<String, String>, url: &str, id: &str) -> Result<Str
     Ok(format!("wrote {} (restart Claude Code in that folder to pick it up)", path.display()))
 }
 
+fn s_usage() -> &'static str {
+    "usage: labctl <join|leave|status|output|tee|hook|goto|say|note|flag|phase|log|raw|pipe|config|config-set|setup-claude> [--key value ...]\n  join needs --id (example: labctl join --id e1 --name Ada --role engineer --model claude-opus)"
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() {
-        eprintln!("usage: labctl <join|leave|status|output|tee|hook|goto|say|note|flag|phase|log|raw|pipe|config|config-set|setup-claude> [--key value ...]");
+        eprintln!("{}", s_usage());
         std::process::exit(1);
     }
     let cmd = args[0].as_str();
@@ -217,6 +221,14 @@ fn main() {
     let g = |k: &str| kv.get(k).cloned().unwrap_or_default();
     let opt = |k: &str| kv.get(k).cloned();
 
+    if kv.contains_key("help") || matches!(cmd, "help" | "-h") {
+        println!("{}", s_usage());
+        return;
+    }
+    if cmd == "join" && id.is_empty() {
+        eprintln!("labctl: join needs --id (see `labctl --help`)");
+        std::process::exit(1);
+    }
     let result = match cmd {
         "join" => post(
             &url,
