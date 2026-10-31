@@ -291,7 +291,16 @@ fn handle(mut s: TcpStream, sh: Arc<Mutex<Shared>>, web: &Path) -> std::io::Resu
     let mut body = vec![0u8; len];
     r.read_exact(&mut body)?;
 
+    // HEAD behaves like GET (health probes use it); only the body is dropped
+    let head_only = method == "HEAD";
+    let method = if head_only { "GET".to_string() } else { method };
+    if head_only {
+        let ok = matches!(path.as_str(), "/" | "/index.html" | "/lab_web.wasm" | "/api/health" | "/api/snapshot" | "/api/config");
+        let code = if ok { "200 OK" } else { "404 Not Found" };
+        return respond(&mut s, code, "text/plain", b"").map(|_| ());
+    }
     match (method.as_str(), path.as_str()) {
+        ("GET", "/api/events") => respond(&mut s, "405 Method Not Allowed", "application/json", b"{\"error\":\"POST events here (one event or an array); read state with GET /api/snapshot\"}"),
         ("OPTIONS", _) => respond(&mut s, "204 No Content", "text/plain", b""),
         ("GET", "/") | ("GET", "/index.html") => match std::fs::read(web.join("index.html")) {
             Ok(b) => respond(&mut s, "200 OK", "text/html; charset=utf-8", &b),
