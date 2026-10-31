@@ -129,3 +129,40 @@ fn reported_status_say_and_notes_show_in_the_terminal() {
     let t: Vec<&str> = w.agents[0].terminal.iter().map(|s| s.as_str()).collect();
     assert_eq!(t, ["[status] typing: writing loader", "[screen] main.rs", "[say] found a bug", "[works] loader ok"]);
 }
+
+#[test]
+fn busy_office_working_at_desk_idle_in_lounge_and_visits() {
+    let mut w = World::new();
+    for id in ["a", "b", "c"] {
+        w.apply(&Event::Join { id: id.into(), name: id.to_uppercase(), role: Role::Engineer, model: None, harness: None, bio: None, color: None });
+    }
+    w.apply(&Event::Status { id: "a".into(), activity: Activity::Typing, task: Some("coding".into()), screen: None });
+    for _ in 0..1200 {
+        w.tick(0.05);
+    }
+    let by = |w: &World, id: &str| w.agent(id).unwrap().clone();
+    assert!(by(&w, "a").working(w.t) && by(&w, "a").seated(), "worker stays at desk");
+    assert!(!by(&w, "b").working(w.t) && !by(&w, "b").seated(), "idle agent left the desk");
+    assert_eq!(w.agents.iter().filter(|a| a.working(w.t)).count(), 1);
+    // a speaks to c: walks over next to c
+    w.apply(&Event::Say { id: "a".into(), text: "@c please review".into() });
+    assert!(!by(&w, "a").path.is_empty());
+    for _ in 0..1200 {
+        w.tick(0.05);
+        if w.agent("a").unwrap().path.is_empty() {
+            break;
+        }
+    }
+    let (a, c) = (by(&w, "a"), by(&w, "c"));
+    assert!((a.x - c.x).abs() < 14.0 && (a.y - c.y).abs() < 14.0, "a stands next to c");
+    // back to the desk after the bubble fades
+    for _ in 0..1200 {
+        w.tick(0.05);
+    }
+    assert!(by(&w, "a").seated());
+    // stale workers are no longer counted
+    for _ in 0..3000 {
+        w.tick(0.05);
+    }
+    assert_eq!(w.agents.iter().filter(|a| a.working(w.t)).count(), 0);
+}
