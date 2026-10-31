@@ -479,7 +479,8 @@ fn draw_agent(fb: &mut Fb, a: &Agent, v: &View) {
         fb.set(l + 2, top + 7, YELLOW);
     }
     let arm = shade(shirt, 0.75);
-    let typing = seated && a.online && a.activity == Activity::Typing;
+    let working = a.working(v.world.t);
+    let typing = seated && working && matches!(a.activity, Activity::Typing | Activity::Testing | Activity::Thinking | Activity::Reading);
     let lift = if typing && ((v.t * 10.0) as i32 + a.look as i32) % 2 == 0 { 1 } else { 0 };
     let lift2 = if typing { 1 - lift } else { 0 };
     fb.rect(l, top + 6 - lift, 1, 4, arm);
@@ -495,7 +496,9 @@ fn draw_agent(fb: &mut Fb, a: &Agent, v: &View) {
         fb.rect(l + 2, top + 11, 2, 3 - ph, pants);
         fb.rect(l + 4, top + 11, 2, 2 + ph, pants);
     }
-    if a.external {
+    if working {
+        fb.rect(a.x as i32 - 1, top - 3, 3, 2, GREEN);
+    } else if a.external {
         fb.rect(a.x as i32, top - 3, 1, 2, CYAN);
     }
     if !a.online && seated {
@@ -668,7 +671,9 @@ fn draw_hud(fb: &mut Fb, v: &View) {
     y += 7;
     let online = w.agents.iter().filter(|a| a.online).count();
     let live = w.agents.iter().filter(|a| a.external).count();
-    fb.text(4, y, &format!("AGENTS {}  ONLINE {}  LIVE {}  MODELS {}", w.agents.len(), online, live, w.models.len()), DIM);
+    let busy = w.agents.iter().filter(|a| a.working(w.t)).count();
+    let wx = fb.text(4, y, &format!("{} WORKING / {}", busy, w.agents.len()), if busy > 0 { GREEN } else { DIM });
+    fb.text(wx + 6, y, &format!("ONLINE {}  LIVE {}  MODELS {}", online, live, w.models.len()), DIM);
     y += 7;
     let (msg, c) = if w.demo {
         ("DEMO FEED ON - SAMPLE DATA, NOT REAL MODELS", ORANGE)
