@@ -38,9 +38,19 @@ pub struct Agent {
     /// has shown any sign of life; roster agents start offline
     pub online: bool,
     pub last_seen: f32,
+    /// sent off to the lounge/coffee (or to chat with someone); cleared by the next work status
+    #[serde(default)]
+    pub away: bool,
 }
 
+/// An agent with no event for this long is treated as idle even if its last status was work.
+const STALE_S: f32 = 120.0;
+
 impl Agent {
+    /// Doing something right now: online, a work activity, and heard from recently.
+    pub fn working(&self, now: f32) -> bool {
+        self.online && !matches!(self.activity, Activity::Idle | Activity::Waiting) && now - self.last_seen < STALE_S
+    }
     pub fn seat(&self) -> Option<(f32, f32)> {
         self.seat_pos
     }
@@ -282,6 +292,7 @@ impl World {
             external: false,
             online: true,
             last_seen: self.t,
+            away: false,
         }
     }
 
@@ -381,6 +392,35 @@ impl World {
             _ => return None,
         };
         Some(p)
+    }
+
+    /// Who a message is for: "@name", "@id" or a leading "name:" / "id," naming another agent.
+    fn addressee(&self, from: usize, text: &str) -> Option<String> {
+        let lower = text.to_lowercase();
+        let head: String = lower.chars().take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '-').collect();
+        self.agents.iter().enumerate().find_map(|(k, o)| {
+            if k == from || !o.online {
+                return None;
+            }
+            let (id, name) = (o.id.to_lowercase(), o.name.to_lowercase());
+            let mentioned = [&id, &name].iter().any(|n| !n.is_empty() && (lower.contains(&format!("@{n}")) || head == **n));
+            mentioned.then(|| o.id.clone())
+        })
+    }
+
+    /// Walk agent `i` to a place. "break" picks the lounge or the coffee corner by agent.
+    fn send_to(&mut self, i: usize, place: &str) {
+        let id = self.agents[i].id.clone();
+        let place = match place {
+            "break" => if hash(&id) % 2 == 0 { "lounge" } else { "coffee" },
+            p => p,
+        };
+        let away = place != "desk";
+        if let Some(t) = self.resolve_place(&id, place) {
+            let a = &mut self.agents[i];
+            a.path = self.layout.route((a.x, a.y), t);
+            a.away = away;
+        }
     }
 
     fn touch(&mut self, id: &str) -> Option<usize> {
@@ -489,6 +529,13 @@ impl World {
                     if let Some(s) = screen {
                         a.screen = s.iter().take(24).cloned().collect();
                     }
+                    let work = !matches!(a.activity, Activity::Idle | Activity::Waiting);
+                    if work && (a.away || !(a.seated() || !a.path.is_empty())) {
+                        self.send_to(i, "desk");
+                    } else if !work && !self.agents[i].away {
+                        self.send_to(i, "break");
+                    }
+                    let a = &mut self.agents[i];
                     let (act, task) = (format!("{:?}", a.activity).to_lowercase(), a.task.clone());
                     let shown = a.screen.iter().filter(|l| !l.is_empty()).cloned().collect::<Vec<_>>().join(" | ");
                     if !task.is_empty() && task != old_task {
@@ -503,6 +550,9 @@ impl World {
                 if let Some(i) = self.touch(id) {
                     self.agents[i].bubble = Some(text.clone());
                     self.agents[i].bubble_t = 4.0;
+                    if let Some(other) = self.addressee(i, text) {
+                        self.send_to(i, &format!("agent:{other}"));
+                    }
                     self.mirror(i, format!("[say] {text}"));
                 }
             }
@@ -754,12 +804,24 @@ impl World {
     pub fn tick(&mut self, dt: f32) {
         let dt = dt.clamp(0.0, 0.25);
         self.t += dt;
-        for a in self.agents.iter_mut() {
-            if a.bubble_t > 0.0 {
+        let now = self.t;
+        // (index, place) moves to start after the loop: back to the desk once a chat bubble
+        // fades, or off to a break when an agent has gone quiet. Almost always empty.
+        let mut moves: Vec<(usize, &'static str)> = vec![];
+        for (i, a) in self.agents.iter_mut().enumerate() {
+            // a visitor keeps talking while walking over; the bubble fades after arriving
+            let visiting = a.away && a.working(now) && !a.path.is_empty();
+            if a.bubble_t > 0.0 && !visiting {
                 a.bubble_t -= dt;
                 if a.bubble_t <= 0.0 {
                     a.bubble = None;
+                    if a.away && a.working(now) {
+                        moves.push((i, "desk"));
+                    }
                 }
+            }
+            if a.online && !a.away && a.path.is_empty() && !a.working(now) {
+                moves.push((i, "break"));
             }
             let mut budget = WALK_SPEED * dt;
             while budget > 0.0 && !a.path.is_empty() {
@@ -784,6 +846,9 @@ impl World {
             if a.path.is_empty() {
                 a.walk = 0.0;
             }
+        }
+        for (i, place) in moves {
+            self.send_to(i, place);
         }
         if self.arena.running {
             self.arena.elapsed += dt;
