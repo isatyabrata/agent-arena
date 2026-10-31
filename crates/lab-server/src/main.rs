@@ -5,12 +5,15 @@
 //!   GET  /api/stream       Server-Sent Events: a snapshot, then every event
 //!   GET  /api/snapshot     current world as JSON
 //!   POST /api/events       one event or an array of events (any harness)
+//!   GET  /api/load         machine load: load avg, CPU %, free memory, training processes
 //!   GET  /api/health
 //!
 //! The world (members, terminals, notes) is saved to a state file every few seconds
 //! and reloaded on start, so a restart no longer wipes everyone.
 //!
 //! Only std + serde_json, one thread per connection.
+
+mod load;
 
 use lab_core::{Config, DemoFeed, Event, World};
 use std::collections::BTreeSet;
@@ -241,14 +244,23 @@ fn main() {
         }
     });
 
+    // machine load: sampled every 5 s, cached for /api/load
+    let load_json = Arc::new(Mutex::new(String::from("{}")));
+    let cache = load_json.clone();
+    std::thread::spawn(move || loop {
+        *cache.lock().unwrap() = load::sample();
+        std::thread::sleep(Duration::from_secs(5));
+    });
+
     let listener = TcpListener::bind(&bind).expect("bind failed");
     println!("Lab running at http://{}  (demo feed: {}, config: {})", bind, if demo { "on" } else { "off" }, args.config.display());
     let web = Arc::new(args.web);
     for stream in listener.incoming().flatten() {
         let sh = shared.clone();
         let web = web.clone();
+        let load_json = load_json.clone();
         std::thread::spawn(move || {
-            let _ = handle(stream, sh, &web);
+            let _ = handle(stream, sh, &web, &load_json);
         });
     }
 }
@@ -262,7 +274,7 @@ fn respond(s: &mut TcpStream, code: &str, ctype: &str, body: &[u8]) -> std::io::
     s.write_all(body)
 }
 
-fn handle(mut s: TcpStream, sh: Arc<Mutex<Shared>>, web: &Path) -> std::io::Result<()> {
+fn handle(mut s: TcpStream, sh: Arc<Mutex<Shared>>, web: &Path, load_json: &Mutex<String>) -> std::io::Result<()> {
     s.set_read_timeout(Some(Duration::from_secs(10)))?;
     let mut r = BufReader::new(s.try_clone()?);
     let mut first = String::new();
@@ -302,6 +314,10 @@ fn handle(mut s: TcpStream, sh: Arc<Mutex<Shared>>, web: &Path) -> std::io::Resu
             Err(_) => respond(&mut s, "404 Not Found", "text/plain", b"run ./build.sh first"),
         },
         ("GET", "/api/health") => respond(&mut s, "200 OK", "application/json", b"{\"ok\":true}"),
+        ("GET", "/api/load") => {
+            let body = load_json.lock().unwrap().clone();
+            respond(&mut s, "200 OK", "application/json", body.as_bytes())
+        }
         ("GET", "/api/snapshot") => {
             let json = serde_json::to_vec(&sh.lock().unwrap().world).unwrap();
             respond(&mut s, "200 OK", "application/json", &json)
