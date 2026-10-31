@@ -169,6 +169,7 @@ pub struct LogLine {
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)] // new fields in later versions must not invalidate a saved state
 pub struct World {
     pub t: f32,
     pub phase: String,
