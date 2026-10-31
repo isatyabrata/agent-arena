@@ -1,0 +1,108 @@
+# AI Innovators Lab configuration.
+# The server reloads this file within a second of any save, so a master agent can
+# edit it directly (or POST it to /api/config, or run `labctl config-set lab.toml`).
+# Every key is optional; anything left out falls back to the default shown in
+# docs/CONFIG.md.
+
+[lab]
+name = "AI INNOVATORS LAB"
+bind = "127.0.0.1:7878"   # use "0.0.0.0:7878" to open it to your network (then set a token)
+token = ""                # if set, posting events/config needs "Authorization: Bearer <token>"
+demo = false              # true = sample agents and scripted robots fill the lab
+demo_per_role = 5         # demo only: researchers/scientists/engineers/testers to create
+
+[limits]
+max_agents = 200
+terminal_lines = 400      # scrollback kept per agent terminal
+log_lines = 120
+notes = 80
+desk_columns = 3          # desks per row; rooms add rows as people arrive
+
+[arena]
+name = "ARENA"
+lanes = 4                 # robots that can compete at once (1-8)
+slot = 1                  # position among the bottom-row rooms
+
+# Preset tasks. Agents are NOT limited to these: any agent or referee can define
+# a brand-new task at runtime with an `arena_start` event (see docs/PROTOCOL.md).
+[[arena.tasks]]
+name = "ROBOT PROTOTYPE"
+description = "Assemble a rover: sensor head, arm, battery, motors, chassis and wheels."
+goal = "first complete, correct rover wins"
+parts = [
+  { name = "chassis", color = "#8a94a6", glyph = "C" },
+  { name = "wheel",   color = "#2a2d36", glyph = "W" },
+  { name = "motor",   color = "#f08a3c", glyph = "M" },
+  { name = "battery", color = "#52b670", glyph = "B" },
+  { name = "sensor",  color = "#64cdeb", glyph = "S" },
+  { name = "arm",     color = "#f2d05a", glyph = "A" },
+]
+blueprint = ["..5..", "6.5.6", "61116", ".141.", "31113", "11111", "2...2"]
+
+[[arena.tasks]]
+name = "OPEN DESIGN: TALLEST TOWER"
+description = "No blueprint. Build the tallest tower you can; the referee scores height and stability."
+goal = "highest referee score wins"
+cols = 5
+rows = 10
+
+[[arena.tasks]]
+name = "ROCKET BUILD"
+goal = "first to match the blueprint exactly wins"
+blueprint = ["..1..", ".121.", ".222.", ".232.", ".222.", "2.2.2", "3...3"]
+
+# Rooms, left to right. `row` is "top" or "bottom"; the arena sits in the bottom row.
+# kind: research | science | engineering | integrity | testing | command | lounge
+# roles: captain | researcher | scientist | engineer | tester | auditor | scribe | guest
+[[rooms]]
+name = "RESEARCH WING"
+kind = "research"
+roles = ["researcher"]
+desks = 6
+row = "top"
+
+[[rooms]]
+name = "SCIENCE LAB"
+kind = "science"
+roles = ["scientist"]
+desks = 6
+row = "top"
+
+[[rooms]]
+name = "ENGINEERING BAY"
+kind = "engineering"
+roles = ["engineer"]
+desks = 6
+row = "top"
+
+[[rooms]]
+name = "INTEGRITY OFFICE"
+kind = "integrity"
+roles = ["auditor"]
+desks = 2
+row = "top"
+
+[[rooms]]
+name = "TEST LAB"
+kind = "testing"
+roles = ["tester"]
+desks = 6
+row = "bottom"
+
+[[rooms]]
+name = "COMMAND"
+kind = "command"
+roles = ["captain", "scribe", "guest"]
+desks = 4
+row = "bottom"
+
+# Pre-declared agents (optional). They show at their desks, dimmed, until their
+# harness sends a first event. Agents not listed here can still join at any time.
+# [[agents]]
+# id = "r1"
+# name = "Ada"
+# role = "researcher"
+# model = "claude-opus"
+# harness = "claude-code"
+# bio = "Explores memory architectures."
+# color = "#9866d4"
