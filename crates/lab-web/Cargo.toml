@@ -1,0 +1,11 @@
+[package]
+name = "lab-web"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+lab-core = { path = "../lab-core" }
+serde_json = "1"

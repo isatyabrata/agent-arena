@@ -1,0 +1,311 @@
+//! lab-server: hosts the shared virtual world.
+//!
+//!   GET  /                 viewer (web/index.html)
+//!   GET  /lab_web.wasm     renderer
+//!   GET  /api/stream       Server-Sent Events: a snapshot, then every event
+//!   GET  /api/snapshot     current world as JSON
+//!   POST /api/events       one event or an array of events (any harness)
+//!   GET  /api/health
+//!
+//! Only std + serde_json, one thread per connection.
+
+use lab_core::{Config, DemoFeed, Event, World};
+use std::collections::BTreeSet;
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+struct Shared {
+    world: World,
+    demo: Option<DemoFeed>,
+    inbox: Vec<Event>,
+    clients: Vec<TcpStream>,
+    external: BTreeSet<String>,
+    token: Option<String>,
+    config_path: PathBuf,
+    /// pending raw SSE lines (config pushes) to broadcast on the next tick
+    extra: Vec<String>,
+}
+
+struct Args {
+    bind: Option<String>,
+    web: PathBuf,
+    demo: bool,
+    config: PathBuf,
+}
+
+fn parse_args() -> Args {
+    let mut c = Args { bind: None, web: PathBuf::from("web"), demo: false, config: PathBuf::from("lab.toml") };
+    let mut args = std::env::args().skip(1);
+    while let Some(a) = args.next() {
+        match a.as_str() {
+            "--bind" => c.bind = Some(args.next().expect("--bind needs host:port")),
+            "--web" => c.web = PathBuf::from(args.next().expect("--web needs a path")),
+            "--config" => c.config = PathBuf::from(args.next().expect("--config needs a path")),
+            "--demo" => c.demo = true,
+            "-h" | "--help" => {
+                println!("lab-server [--config lab.toml] [--bind 127.0.0.1:7878] [--web ./web] [--demo]\n  The config file is hot-reloaded. LAB_TOKEN env overrides lab.token.");
+                std::process::exit(0);
+            }
+            other => eprintln!("ignoring unknown argument {other}"),
+        }
+    }
+    c
+}
+
+fn load_config(path: &Path) -> Result<Config, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    toml::from_str::<Config>(&text).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+fn mtime(path: &Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
+}
+
+/// Apply a new config and queue a push to every viewer.
+fn install_config(s: &mut Shared, cfg: Config) {
+    s.world.set_config(cfg.clone());
+    s.extra.push(format!("{{\"config\":{}}}", serde_json::to_string(&cfg).unwrap()));
+    s.world.log("config reloaded", true);
+    s.extra.push(r#"{"type":"log","text":"config reloaded"}"#.into());
+}
+
+fn main() {
+    let args = parse_args();
+    let config = if args.config.exists() {
+        match load_config(&args.config) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("config error: {e}");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        eprintln!("no {} found, using defaults", args.config.display());
+        Config::default()
+    };
+    let demo = args.demo || config.lab.demo;
+    let bind = args.bind.clone().unwrap_or_else(|| config.lab.bind.clone());
+    let token = std::env::var("LAB_TOKEN").ok().filter(|t| !t.is_empty()).or_else(|| Some(config.lab.token.clone()).filter(|t| !t.is_empty()));
+    let mut world = World::with_config(config);
+    world.demo = demo;
+    let shared = Arc::new(Mutex::new(Shared {
+        world,
+        demo: demo.then(|| DemoFeed::new(7)),
+        inbox: vec![],
+        clients: vec![],
+        external: BTreeSet::new(),
+        token,
+        config_path: args.config.clone(),
+        extra: vec![],
+    }));
+
+    // hot reload: poll the config file once a second
+    let watch = shared.clone();
+    let path = args.config.clone();
+    std::thread::spawn(move || {
+        let mut last = mtime(&path);
+        loop {
+            std::thread::sleep(Duration::from_secs(1));
+            let now = mtime(&path);
+            if now.is_some() && now != last {
+                last = now;
+                match load_config(&path) {
+                    Ok(cfg) => {
+                        let mut s = watch.lock().unwrap();
+                        if cfg != s.world.config {
+                            install_config(&mut s, cfg);
+                            println!("config reloaded from {}", path.display());
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("config error (keeping previous config): {e}");
+                        let mut s = watch.lock().unwrap();
+                        s.world.log(format!("config error: {e}"), true);
+                    }
+                }
+            }
+        }
+    });
+
+    // simulation loop: 20 Hz
+    let sim = shared.clone();
+    std::thread::spawn(move || {
+        let mut last = Instant::now();
+        loop {
+            std::thread::sleep(Duration::from_millis(50));
+            let dt = last.elapsed().as_secs_f32();
+            last = Instant::now();
+            let mut guard = sim.lock().unwrap();
+            let s = &mut *guard;
+            let mut events = match s.demo.as_mut() {
+                Some(d) => d.step(&s.world, dt),
+                None => vec![],
+            };
+            events.append(&mut s.inbox);
+            let mut lines = std::mem::take(&mut s.extra);
+            for e in &events {
+                s.world.apply(e);
+                lines.push(serde_json::to_string(e).unwrap());
+            }
+            // mark agents driven by real harnesses so the demo feed leaves them alone
+            for id in s.external.iter() {
+                if let Some(a) = s.world.agents.iter_mut().find(|a| &a.id == id) {
+                    if !a.external {
+                        a.external = true;
+                        lines.push(format!("{{\"external\":{}}}", serde_json::to_string(id).unwrap()));
+                    }
+                }
+            }
+            s.world.tick(dt);
+            if !lines.is_empty() {
+                let mut payload = String::new();
+                for l in &lines {
+                    payload.push_str("data: ");
+                    payload.push_str(l);
+                    payload.push_str("\n\n");
+                }
+                s.clients.retain_mut(|c| c.write_all(payload.as_bytes()).is_ok());
+            }
+        }
+    });
+
+    let listener = TcpListener::bind(&bind).expect("bind failed");
+    println!("Lab running at http://{}  (demo feed: {}, config: {})", bind, if demo { "on" } else { "off" }, args.config.display());
+    let web = Arc::new(args.web);
+    for stream in listener.incoming().flatten() {
+        let sh = shared.clone();
+        let web = web.clone();
+        std::thread::spawn(move || {
+            let _ = handle(stream, sh, &web);
+        });
+    }
+}
+
+fn respond(s: &mut TcpStream, code: &str, ctype: &str, body: &[u8]) -> std::io::Result<()> {
+    let head = format!(
+        "HTTP/1.1 {code}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: content-type, authorization\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    s.write_all(head.as_bytes())?;
+    s.write_all(body)
+}
+
+fn handle(mut s: TcpStream, sh: Arc<Mutex<Shared>>, web: &Path) -> std::io::Result<()> {
+    s.set_read_timeout(Some(Duration::from_secs(10)))?;
+    let mut r = BufReader::new(s.try_clone()?);
+    let mut first = String::new();
+    r.read_line(&mut first)?;
+    let mut parts = first.split_whitespace();
+    let method = parts.next().unwrap_or("").to_string();
+    let path = parts.next().unwrap_or("/").split('?').next().unwrap_or("/").to_string();
+    let mut len = 0usize;
+    let mut auth = String::new();
+    loop {
+        let mut h = String::new();
+        if r.read_line(&mut h)? == 0 || h == "\r\n" || h == "\n" {
+            break;
+        }
+        let lower = h.to_ascii_lowercase();
+        if let Some(v) = lower.strip_prefix("content-length:") {
+            len = v.trim().parse().unwrap_or(0);
+        }
+        if lower.starts_with("authorization:") {
+            auth = h["authorization:".len()..].trim().to_string();
+        }
+    }
+    if len > 1 << 20 {
+        return respond(&mut s, "413 Payload Too Large", "text/plain", b"max 1 MB");
+    }
+    let mut body = vec![0u8; len];
+    r.read_exact(&mut body)?;
+
+    match (method.as_str(), path.as_str()) {
+        ("OPTIONS", _) => respond(&mut s, "204 No Content", "text/plain", b""),
+        ("GET", "/") | ("GET", "/index.html") => match std::fs::read(web.join("index.html")) {
+            Ok(b) => respond(&mut s, "200 OK", "text/html; charset=utf-8", &b),
+            Err(_) => respond(&mut s, "404 Not Found", "text/plain", b"web/index.html missing"),
+        },
+        ("GET", "/lab_web.wasm") => match std::fs::read(web.join("lab_web.wasm")) {
+            Ok(b) => respond(&mut s, "200 OK", "application/wasm", &b),
+            Err(_) => respond(&mut s, "404 Not Found", "text/plain", b"run ./build.sh first"),
+        },
+        ("GET", "/api/health") => respond(&mut s, "200 OK", "application/json", b"{\"ok\":true}"),
+        ("GET", "/api/snapshot") => {
+            let json = serde_json::to_vec(&sh.lock().unwrap().world).unwrap();
+            respond(&mut s, "200 OK", "application/json", &json)
+        }
+        ("GET", "/api/stream") => {
+            s.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nAccess-Control-Allow-Origin: *\r\nConnection: keep-alive\r\n\r\n")?;
+            let mut g = sh.lock().unwrap();
+            let snap = format!("data: {{\"snapshot\":{}}}\n\n", serde_json::to_string(&g.world).unwrap());
+            s.write_all(snap.as_bytes())?;
+            s.set_write_timeout(Some(Duration::from_millis(500)))?;
+            g.clients.push(s);
+            Ok(())
+        }
+        ("GET", "/api/config") => {
+            let g = sh.lock().unwrap();
+            let body = toml::to_string_pretty(&g.world.config).unwrap_or_default();
+            drop(g);
+            respond(&mut s, "200 OK", "application/toml", body.as_bytes())
+        }
+        ("POST", "/api/config") => {
+            let mut g = sh.lock().unwrap();
+            if g.token.as_ref().is_some_and(|t| auth != format!("Bearer {t}")) {
+                drop(g);
+                return respond(&mut s, "401 Unauthorized", "application/json", b"{\"error\":\"bad token\"}");
+            }
+            let text = String::from_utf8_lossy(&body).to_string();
+            let parsed = toml::from_str::<Config>(&text).or_else(|e| serde_json::from_str::<Config>(&text).map_err(|_| e.to_string()));
+            match parsed {
+                Ok(cfg) => {
+                    // persist so the file stays the single source of truth
+                    let pretty = toml::to_string_pretty(&cfg).unwrap_or(text);
+                    let path = g.config_path.clone();
+                    if let Err(e) = std::fs::write(&path, pretty) {
+                        eprintln!("could not write {}: {e}", path.display());
+                    }
+                    install_config(&mut g, cfg);
+                    drop(g);
+                    respond(&mut s, "200 OK", "application/json", b"{\"ok\":true}")
+                }
+                Err(e) => {
+                    drop(g);
+                    let msg = serde_json::json!({ "error": e }).to_string();
+                    respond(&mut s, "400 Bad Request", "application/json", msg.as_bytes())
+                }
+            }
+        }
+        ("POST", "/api/events") => {
+            let mut g = sh.lock().unwrap();
+            if g.token.as_ref().is_some_and(|t| auth != format!("Bearer {t}")) {
+                drop(g);
+                return respond(&mut s, "401 Unauthorized", "application/json", b"{\"error\":\"bad token\"}");
+            }
+            let parsed: Result<Vec<Event>, _> = serde_json::from_slice::<Vec<Event>>(&body)
+                .or_else(|_| serde_json::from_slice::<Event>(&body).map(|e| vec![e]));
+            match parsed {
+                Ok(evs) => {
+                    let n = evs.len();
+                    for e in &evs {
+                        if let Some(id) = e.agent_id() {
+                            g.external.insert(id.to_string());
+                        }
+                    }
+                    g.inbox.extend(evs);
+                    drop(g);
+                    respond(&mut s, "200 OK", "application/json", format!("{{\"accepted\":{n}}}").as_bytes())
+                }
+                Err(e) => {
+                    drop(g);
+                    let msg = serde_json::json!({ "error": e.to_string() }).to_string();
+                    respond(&mut s, "400 Bad Request", "application/json", msg.as_bytes())
+                }
+            }
+        }
+        _ => respond(&mut s, "404 Not Found", "text/plain", b"not found"),
+    }
+}

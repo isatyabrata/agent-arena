@@ -1,0 +1,9 @@
+[package]
+name = "lab-server"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+lab-core = { path = "../lab-core" }
+serde_json = "1"
+toml = "0.8"
