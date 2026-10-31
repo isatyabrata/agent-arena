@@ -392,6 +392,25 @@ impl World {
         Some(i)
     }
 
+    /// Mirror what an agent reports (status, speech, notes) into its terminal when it has no
+    /// `output` feed of its own. Harnesses that cannot run `labctl hook` or `labctl tee` would
+    /// otherwise show an empty terminal forever. Repeats of the last line are dropped.
+    fn mirror(&mut self, i: usize, line: String) {
+        if self.demo {
+            return;
+        }
+        let cap = self.config.limits.terminal_lines.max(10);
+        let a = &mut self.agents[i];
+        let line: String = line.lines().next().unwrap_or("").chars().take(400).collect();
+        if line.is_empty() || a.terminal.back() == Some(&line) {
+            return;
+        }
+        a.terminal.push_back(line);
+        while a.terminal.len() > cap {
+            a.terminal.pop_front();
+        }
+    }
+
     pub fn apply(&mut self, e: &Event) {
         match e {
             Event::Join { id, name, role, model, harness, bio, color } => {
@@ -462,6 +481,7 @@ impl World {
             Event::Status { id, activity, task, screen } => {
                 if let Some(i) = self.touch(id) {
                     let a = &mut self.agents[i];
+                    let (old_task, old_screen) = (a.task.clone(), a.screen.clone());
                     a.activity = *activity;
                     if let Some(t) = task {
                         a.task = t.clone();
@@ -469,12 +489,21 @@ impl World {
                     if let Some(s) = screen {
                         a.screen = s.iter().take(24).cloned().collect();
                     }
+                    let (act, task) = (format!("{:?}", a.activity).to_lowercase(), a.task.clone());
+                    let shown = a.screen.iter().filter(|l| !l.is_empty()).cloned().collect::<Vec<_>>().join(" | ");
+                    if !task.is_empty() && task != old_task {
+                        self.mirror(i, format!("[status] {act}: {task}"));
+                    }
+                    if !shown.is_empty() && self.agents[i].screen != old_screen {
+                        self.mirror(i, format!("[screen] {shown}"));
+                    }
                 }
             }
             Event::Say { id, text } => {
                 if let Some(i) = self.touch(id) {
                     self.agents[i].bubble = Some(text.clone());
                     self.agents[i].bubble_t = 4.0;
+                    self.mirror(i, format!("[say] {text}"));
                 }
             }
             Event::Output { id, text } => {
@@ -705,6 +734,9 @@ impl World {
                 };
                 let l = format!("{} {}: {}", self.name_of(by), tag, text);
                 self.log(l, false);
+                if let Some(i) = self.touch(by) {
+                    self.mirror(i, format!("[{}] {}", tag.to_lowercase(), text));
+                }
             }
             Event::Flag { by, target, reason } => {
                 self.flags += 1;
