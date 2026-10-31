@@ -70,6 +70,24 @@ fn free_mb() -> f64 {
     pages * page / 1048576.0
 }
 
+/// Heavy-job slots held under /tmp/lab-heavy (scripts/heavy.sh): [{slot, pid, cmd}], live owners only.
+fn heavy_slots() -> Vec<serde_json::Value> {
+    let mut v = vec![];
+    let Ok(rd) = std::fs::read_dir("/tmp/lab-heavy") else { return v };
+    for e in rd.flatten() {
+        let d = e.path();
+        let rd = |f: &str| std::fs::read_to_string(d.join(f)).unwrap_or_default().trim().to_string();
+        let pid: i64 = rd("pid").parse().unwrap_or(0);
+        if pid <= 0 || run("ps", &["-p", &pid.to_string(), "-o", "pid="]).trim().is_empty() {
+            continue; // owner died; heavy.sh frees the slot itself
+        }
+        let cmd: String = rd("cmd").chars().take(80).collect();
+        v.push(json!({"slot": e.file_name().to_string_lossy(), "pid": pid, "cmd": cmd}));
+    }
+    v.sort_by_key(|x| x["slot"].as_str().unwrap_or("").to_string());
+    v
+}
+
 /// Take one sample as the JSON served on `/api/load`.
 pub fn sample() -> String {
     let n = cores();
@@ -78,7 +96,7 @@ pub fn sample() -> String {
     let cpu_pct = (cpu_sum / n as f64).min(100.0);
     json!({
         "load": load, "cores": n, "cpu_pct": (cpu_pct * 10.0).round() / 10.0,
-        "free_mb": free_mb().round(), "red": load[0] > 2.0 * n as f64, "procs": procs,
+        "free_mb": free_mb().round(), "red": load[0] > 2.0 * n as f64, "procs": procs, "heavy": heavy_slots(),
     })
     .to_string()
 }
