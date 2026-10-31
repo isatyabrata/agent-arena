@@ -44,6 +44,13 @@
   .banner { padding: 6px 8px; border-radius: 4px; background: #2a2410; color: var(--gold); margin-bottom: 8px; }
   .chips { display: flex; flex-wrap: wrap; gap: 4px 10px; margin: 4px 0 8px; color: var(--dim); font-size: 11px; }
   @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+  #load { position: fixed; right: 12px; bottom: 12px; z-index: 5; width: 250px; padding: 8px 10px; font-size: 11px; box-shadow: 0 2px 10px #0008; }
+  #load.red { border-color: var(--bad); background: #2a1215; }
+  #load .hd { display: flex; justify-content: space-between; color: var(--gold); letter-spacing: .08em; text-transform: uppercase; font-size: 10px; margin-bottom: 4px; }
+  #load.red .hd b { color: var(--bad); }
+  #load .row { display: flex; justify-content: space-between; } #load .row span:first-child { color: var(--dim); }
+  #load ul { list-style: none; margin: 4px 0 0; padding: 0; max-height: 110px; overflow: auto; }
+  #load li { display: flex; gap: 6px; } #load li i { margin-left: auto; font-style: normal; color: var(--dim); }
 </style>
 </head>
 <body>
@@ -59,6 +66,30 @@
     <section aria-labelledby="h-arena"><h2 id="h-arena">Arena</h2><div id="arena" class="muted">No competition yet.</div></section>
   </div>
 </main>
+<section id="load" aria-label="Machine load" aria-live="off"><div class="hd"><span>Machine load</span><b id="ld-state">...</b></div>
+  <div class="row"><span>load avg</span><span id="ld-avg">-</span></div>
+  <div class="row"><span>CPU</span><span id="ld-cpu">-</span></div>
+  <div class="row"><span>free mem</span><span id="ld-mem">-</span></div>
+  <ul id="ld-procs"></ul></section>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  async function poll() {
+    try {
+      const d = await (await fetch('/api/load')).json();
+      if (!d.cores) return;
+      $('load').classList.toggle('red', !!d.red);
+      $('ld-state').textContent = d.red ? 'OVERLOADED' : 'ok';
+      $('ld-avg').textContent = d.load.map((v) => v.toFixed(1)).join(' / ') + ' on ' + d.cores + ' cores';
+      $('ld-cpu').textContent = d.cpu_pct.toFixed(0) + '%';
+      $('ld-mem').textContent = d.free_mb >= 1024 ? (d.free_mb / 1024).toFixed(1) + ' GB' : d.free_mb + ' MB';
+      $('ld-procs').innerHTML = d.procs.length ? d.procs.map((p) => '<li><span>' + esc(p.name) + '</span><span>T' + esc(p.track) + '</span><i>' + p.cpu.toFixed(0) + '%</i></li>').join('') : '<li class="muted">no training running</li>';
+    } catch (e) { /* server restarting or standalone page: keep last values */ }
+  }
+  if (location.protocol !== 'file:') { poll(); setInterval(poll, 5000); } else { $('load').hidden = true; }
+})();
+</script>
 <script>
 (async () => {
   const $ = (id) => document.getElementById(id);
