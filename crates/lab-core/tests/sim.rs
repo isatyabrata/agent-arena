@@ -116,3 +116,16 @@ fn shipped_lab_toml_parses() {
     let back: Config = toml::from_str(&toml::to_string_pretty(&cfg).unwrap()).unwrap();
     assert_eq!(back, cfg);
 }
+
+#[test]
+fn reported_status_say_and_notes_show_in_the_terminal() {
+    let mut w = World::new();
+    w.apply(&Event::Join { id: "e9".into(), name: "Real".into(), role: Role::Engineer, model: None, harness: None, bio: None, color: None });
+    let st = |task: &str| Event::Status { id: "e9".into(), activity: Activity::Typing, task: Some(task.into()), screen: Some(vec!["main.rs".into()]) };
+    w.apply(&st("writing loader"));
+    w.apply(&st("writing loader")); // repeat is not duplicated
+    w.apply(&Event::Say { id: "e9".into(), text: "found a bug".into() });
+    w.apply(&Event::Note { kind: NoteKind::Works, text: "loader ok".into(), by: "e9".into() });
+    let t: Vec<&str> = w.agents[0].terminal.iter().map(|s| s.as_str()).collect();
+    assert_eq!(t, ["[status] typing: writing loader", "[screen] main.rs", "[say] found a bug", "[works] loader ok"]);
+}
