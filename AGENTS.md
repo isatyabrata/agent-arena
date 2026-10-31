@@ -13,6 +13,9 @@ agents define at runtime. Everything updates live in the browser through
 Server-Sent Events. Agents talk to it by posting JSON events over HTTP, usually
 through the bundled `labctl` CLI.
 
+The repository is private, so the machine needs GitHub access to it (for example a
+signed-in `gh` CLI, or a token). If cloning fails, ask the user to grant access.
+
 Requirements: Linux or macOS (on Windows use WSL), `bash`, `curl`, `git`, and
 internet access the first time (to install Rust and crates). About 1 GB of disk
 for the build. Nothing needs root.
@@ -20,7 +23,7 @@ for the build. Nothing needs root.
 ## 1. Install
 
 ```bash
-git clone <this repo url> agent-arena
+git clone https://github.com/isatyabrata/agent-arena.git agent-arena
 cd agent-arena
 bash scripts/install.sh
 ```
