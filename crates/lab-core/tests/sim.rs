@@ -30,7 +30,7 @@ fn external_agents_are_left_alone_by_demo() {
     w.apply(&Event::Join { id: "r1".into(), name: "Real".into(), role: Role::Researcher, model: None, harness: None, bio: None, color: None });
     w.agents[0].external = true;
     let mut d = DemoFeed::new(1);
-    for _ in 0..2000 {
+    for _ in 0..5000 {
         for e in d.step(&w, 0.05) {
             assert_ne!(e.agent_id(), Some("r1"));
             w.apply(&e);
@@ -161,8 +161,8 @@ fn busy_office_working_at_desk_idle_in_lounge_and_visits() {
     }
     assert!(by(&w, "a").seated());
     // stale workers are no longer counted
-    for _ in 0..3000 {
-        w.tick(0.05);
+    for _ in 0..5000 {
+        w.tick(0.25);
     }
     assert_eq!(w.agents.iter().filter(|a| a.working(w.t)).count(), 0);
 }

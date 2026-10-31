@@ -43,8 +43,9 @@ pub struct Agent {
     pub away: bool,
 }
 
-/// An agent with no event for this long is treated as idle even if its last status was work.
-const STALE_S: f32 = 120.0;
+/// A work status counts as working until the bot reports idle/waiting, or goes silent this long (20 min).
+/// Bots often set one status at the start of a long turn and then say nothing.
+const STALE_S: f32 = 1200.0;
 
 impl Agent {
     /// Doing something right now: online, a work activity, and heard from recently.
