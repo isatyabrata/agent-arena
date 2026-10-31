@@ -57,6 +57,7 @@
     </section>
     <section aria-labelledby="h-agent"><h2 id="h-agent">Agent</h2><div id="agent" class="muted">Select someone to see their profile, screen and terminal.</div></section>
     <section aria-labelledby="h-arena"><h2 id="h-arena">Arena</h2><div id="arena" class="muted">No competition yet.</div></section>
+    <section aria-labelledby="h-world"><h2 id="h-world">World</h2><div id="world" class="muted">No residents yet.</div></section>
   </div>
 </main>
 <script>
@@ -202,6 +203,30 @@
     box.replaceChildren(...kids);
   }
 
+  // 7 Capability Card markers (arena-referee/MODEL_PROTOCOL.md §6); null = not measured yet.
+  const CARD_LABELS = ['Memory', 'Continual', 'Self-knowledge', 'Self-model', 'Curiosity', 'Goal transfer', 'Others'];
+  function renderWorld(w) {
+    const box = $('world');
+    if (!w.residents.length) { box.className = 'muted'; box.textContent = 'No residents yet. Send a world_join event to add one.'; return; }
+    box.className = '';
+    const kids = [];
+    if (w.killed) kids.push(el('div', { class: 'banner' }, `KILL SWITCH FIRED: ${w.killed}`));
+    const cards = el('div', { class: 'bots' });
+    for (const r of w.residents) {
+      cards.append(el('div', { class: 'bot' },
+        el('h3', {}, r.name),
+        el('div', { class: 'muted' }, r.model + (r.owner ? ' - trained by ' + r.owner : '')),
+        el('div', {}, r.awake ? 'awake' : 'zzz (asleep)'),
+        el('div', {}, 'Trying to: ', el('span', { class: 'intent' }, r.intent || '-')),
+        el('div', { class: 'muted' }, `${r.builds} object(s) built`),
+        ...CARD_LABELS.map((label, i) => el('div', {}, `${label}: `,
+          r.card[i] == null ? el('span', { class: 'muted' }, 'not measured yet')
+            : el('div', { class: 'meter' }, el('i', { style: `width:${(r.card[i] * 100).toFixed(0)}%` }))))));
+    }
+    kids.push(cards);
+    box.replaceChildren(...kids);
+  }
+
   let lastTick = 0;
   function refresh(force) {
     const now = performance.now();
@@ -210,7 +235,7 @@
     const len = ex.lab_panel();
     const d = JSON.parse(dec.decode(new Uint8Array(ex.memory.buffer, ex.lab_panel_ptr(), len)));
     selected = d.selected ? d.selected.id : '';
-    renderRoster(d); renderAgent(d.selected); renderArena(d.arena);
+    renderRoster(d); renderAgent(d.selected); renderArena(d.arena); renderWorld(d.world);
   }
   $('filter').addEventListener('input', () => refresh(true));
   setInterval(() => refresh(false), 300);

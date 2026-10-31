@@ -168,6 +168,31 @@ pub struct LogLine {
     pub alert: bool,
 }
 
+/// One THE WORLD resident, as shown in the viewer's card panel (world/DESIGN.md §4).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Resident {
+    pub id: String,
+    pub name: String,
+    pub model: String,
+    pub owner: String,
+    /// 7 Capability Card markers; `None` = not measured yet, shown plainly, never faked.
+    pub card: Card,
+    pub x: f32,
+    pub y: f32,
+    pub awake: bool,
+    pub intent: String,
+    pub builds: u32,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct WorldRoom {
+    pub residents: Vec<Resident>,
+    /// placed objects: (x, y, spec)
+    pub objects: Vec<(i32, i32, PartSpec)>,
+    /// kill-switch reason, once fired; the viewer shows a halt banner.
+    pub killed: Option<String>,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)] // new fields in later versions must not invalidate a saved state
 pub struct World {
@@ -179,6 +204,7 @@ pub struct World {
     pub agents: Vec<Agent>,
     pub models: Vec<Model>,
     pub arena: Arena,
+    pub world: WorldRoom,
     pub notes: Vec<Note>,
     pub flags: u32,
     pub log: VecDeque<LogLine>,
@@ -799,6 +825,83 @@ impl World {
                 self.log(format!("phase: {}", name), true);
             }
             Event::Log { text } => self.log(text.clone(), false),
+            Event::WorldJoin { resident_id, name, model, owner, card } => {
+                match self.world.residents.iter().position(|r| &r.id == resident_id) {
+                    Some(i) => {
+                        let r = &mut self.world.residents[i];
+                        r.name = name.clone();
+                        r.model = model.clone();
+                        r.owner = owner.clone();
+                        r.card = *card;
+                    }
+                    None => {
+                        self.world.residents.push(Resident {
+                            id: resident_id.clone(),
+                            name: name.clone(),
+                            model: model.clone(),
+                            owner: owner.clone(),
+                            card: *card,
+                            x: 0.0,
+                            y: 0.0,
+                            awake: true,
+                            intent: String::new(),
+                            builds: 0,
+                        });
+                    }
+                }
+                self.log(format!("{} joined THE WORLD", name), false);
+            }
+            Event::WorldLeave { resident_id } => {
+                let name = self
+                    .world
+                    .residents
+                    .iter()
+                    .find(|r| &r.id == resident_id)
+                    .map(|r| r.name.clone())
+                    .unwrap_or_else(|| resident_id.clone());
+                self.world.residents.retain(|r| &r.id != resident_id);
+                self.log(format!("{} left THE WORLD", name), false);
+            }
+            Event::WorldTick { residents, .. } => {
+                for t in residents {
+                    if let Some(r) = self.world.residents.iter_mut().find(|r| r.id == t.resident_id) {
+                        r.x = t.x;
+                        r.y = t.y;
+                        r.awake = t.awake;
+                        if !t.intent.is_empty() {
+                            r.intent = t.intent.clone();
+                        }
+                    }
+                }
+            }
+            Event::WorldBuild { resident_id, x, y, object } => match object {
+                Some(spec) => {
+                    self.world.objects.push((*x, *y, spec.clone()));
+                    while self.world.objects.len() > 500 {
+                        self.world.objects.remove(0);
+                    }
+                    if let Some(r) = self.world.residents.iter_mut().find(|r| &r.id == resident_id) {
+                        r.builds += 1;
+                    }
+                }
+                None => {
+                    self.world.objects.retain(|(ox, oy, _)| !(ox == x && oy == y));
+                }
+            },
+            Event::WorldSleep { resident_id, sleeping } => {
+                if let Some(r) = self.world.residents.iter_mut().find(|r| &r.id == resident_id) {
+                    r.awake = !sleeping;
+                }
+            }
+            Event::WorldCard { resident_id, card } => {
+                if let Some(r) = self.world.residents.iter_mut().find(|r| &r.id == resident_id) {
+                    r.card = *card;
+                }
+            }
+            Event::WorldKill { reason } => {
+                self.world.killed = Some(reason.clone());
+                self.log(format!("WORLD KILL SWITCH: {}", reason), true);
+            }
         }
     }
 
@@ -907,11 +1010,23 @@ impl World {
                 })
             })
             .collect();
+        let wr = &self.world;
+        let residents: Vec<_> = wr
+            .residents
+            .iter()
+            .map(|r| {
+                json!({
+                    "id": r.id, "name": r.name, "model": r.model, "owner": self.name_of(&r.owner),
+                    "x": r.x, "y": r.y, "awake": r.awake, "intent": r.intent, "builds": r.builds, "card": r.card,
+                })
+            })
+            .collect();
         json!({
             "lab": self.config.lab.name, "phase": self.phase, "demo": self.demo,
             "agents": roster, "selected": sel,
             "arena": {"title": ar.title, "description": ar.description, "goal": ar.goal, "has_target": ar.has_target(),
                 "parts": ar.parts, "match": ar.matches, "running": ar.running, "elapsed": ar.elapsed, "note": ar.note, "robots": robots},
+            "world": {"residents": residents, "killed": wr.killed},
         })
         .to_string()
     }
