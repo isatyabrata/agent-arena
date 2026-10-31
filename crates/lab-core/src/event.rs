@@ -114,9 +114,12 @@ pub enum RobotAction {
     Submit { text: String },
 }
 
-/// The 7 Capability Card markers (arena-referee/MODEL_PROTOCOL.md §6: Memory, Continual,
-/// Self-knowledge, Self-model, Curiosity, Goal transfer, Others). `None` = not measured yet;
-/// the viewer must show that plainly and never draw a fake number.
+/// The 7 Capability Card markers, index = marker − 1, in MODEL_PROTOCOL.md §6 order:
+/// `[0]` 1 Memory, `[1]` 2 Continual, `[2]` 3 Self-knowledge, `[3]` 4 Self-model,
+/// `[4]` 5 Curiosity, `[5]` 6 Goal transfer, `[6]` 7 Others. Each score is 0.0-1.0
+/// (Brier/accuracy/recall per §6's scoring column). `None` = not measured yet, shown
+/// plainly, never a fake number; `Some(0.0)` = measured and scored 0 (§6: "a model that
+/// skips them scores 0 on the marker") — these two states are never conflated.
 pub type Card = [Option<f32>; 7];
 
 /// One resident's position/state for a batched `world_tick`.
@@ -126,7 +129,7 @@ pub struct WorldResidentTick {
     pub x: f32,
     pub y: f32,
     pub awake: bool,
-    #[serde(default)]
+    /// Mandatory, like `arena_action`'s `intent` (MODEL_PROTOCOL.md §3).
     pub intent: String,
 }
 
