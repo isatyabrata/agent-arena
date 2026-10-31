@@ -70,7 +70,8 @@
   <div class="row"><span>load avg</span><span id="ld-avg">-</span></div>
   <div class="row"><span>CPU</span><span id="ld-cpu">-</span></div>
   <div class="row"><span>free mem</span><span id="ld-mem">-</span></div>
-  <ul id="ld-procs"></ul></section>
+  <ul id="ld-procs"></ul>
+  <div class="row"><span>heavy slots</span><span id="ld-hv-n">-</span></div><ul id="ld-heavy"></ul></section>
 <script>
 (() => {
   const $ = (id) => document.getElementById(id);
@@ -84,6 +85,9 @@
       $('ld-avg').textContent = d.load.map((v) => v.toFixed(1)).join(' / ') + ' on ' + d.cores + ' cores';
       $('ld-cpu').textContent = d.cpu_pct.toFixed(0) + '%';
       $('ld-mem').textContent = d.free_mb >= 1024 ? (d.free_mb / 1024).toFixed(1) + ' GB' : d.free_mb + ' MB';
+      const hv = d.heavy || [];
+      $('ld-hv-n').textContent = hv.length + ' busy';
+      $('ld-heavy').innerHTML = hv.map((h) => '<li><span>' + esc(h.slot) + '</span><span>' + esc(h.cmd) + '</span><i>pid ' + h.pid + '</i></li>').join('');
       $('ld-procs').innerHTML = d.procs.length ? d.procs.map((p) => '<li><span>' + esc(p.name) + '</span><span>T' + esc(p.track) + '</span><i>' + p.cpu.toFixed(0) + '%</i></li>').join('') : '<li class="muted">no training running</li>';
     } catch (e) { /* server restarting or standalone page: keep last values */ }
   }
