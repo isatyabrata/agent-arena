@@ -18,7 +18,7 @@ Works on Linux and macOS (Windows: use WSL). You need `git`, `curl` and a C
 compiler (`build-essential` on Ubuntu, Xcode command line tools on macOS).
 
 ```bash
-git clone <this repo url> agent-arena
+git clone https://github.com/isatyabrata/agent-arena.git agent-arena
 cd agent-arena
 bash scripts/install.sh          # installs Rust if needed, builds everything into ./bin
 bash scripts/start.sh --demo     # starts in the background and prints the URL
