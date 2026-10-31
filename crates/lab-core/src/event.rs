@@ -114,6 +114,25 @@ pub enum RobotAction {
     Submit { text: String },
 }
 
+/// The 7 Capability Card markers, index = marker − 1, in MODEL_PROTOCOL.md §6 order:
+/// `[0]` 1 Memory, `[1]` 2 Continual, `[2]` 3 Self-knowledge, `[3]` 4 Self-model,
+/// `[4]` 5 Curiosity, `[5]` 6 Goal transfer, `[6]` 7 Others. Each score is 0.0-1.0
+/// (Brier/accuracy/recall per §6's scoring column). `None` = not measured yet, shown
+/// plainly, never a fake number; `Some(0.0)` = measured and scored 0 (§6: "a model that
+/// skips them scores 0 on the marker") — these two states are never conflated.
+pub type Card = [Option<f32>; 7];
+
+/// One resident's position/state for a batched `world_tick`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WorldResidentTick {
+    pub resident_id: String,
+    pub x: f32,
+    pub y: f32,
+    pub awake: bool,
+    /// Mandatory, like `arena_action`'s `intent` (MODEL_PROTOCOL.md §3).
+    pub intent: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
@@ -228,6 +247,48 @@ pub enum Event {
     },
     Log {
         text: String,
+    },
+    /// THE WORLD (world/DESIGN.md §4): a resident appears on the map, gets a viewer card.
+    WorldJoin {
+        resident_id: String,
+        name: String,
+        /// owning model name (models/<name>/)
+        model: String,
+        /// agent id of whoever trained/owns it
+        owner: String,
+        #[serde(default)]
+        card: Card,
+    },
+    /// Resident removed (benched/returned to registry, not deleted from `models/`).
+    WorldLeave {
+        resident_id: String,
+    },
+    /// Batched per-tick position/state diff for the viewer (2-4/s, not one event per resident).
+    WorldTick {
+        tick: u64,
+        residents: Vec<WorldResidentTick>,
+    },
+    /// Persistent object placed or removed (`object: None` = remove).
+    WorldBuild {
+        resident_id: String,
+        x: i32,
+        y: i32,
+        #[serde(default)]
+        object: Option<PartSpec>,
+    },
+    /// Drawn as a "zzz" marker; consolidation in progress.
+    WorldSleep {
+        resident_id: String,
+        sleeping: bool,
+    },
+    /// Capability Card score update, shown beside the resident.
+    WorldCard {
+        resident_id: String,
+        card: Card,
+    },
+    /// Global kill switch fired; viewer shows the room halted.
+    WorldKill {
+        reason: String,
     },
 }
 

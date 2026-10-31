@@ -63,6 +63,7 @@ fn floor_color(k: Option<BoxKind>) -> (u32, u32) {
         Some(BoxKind::Room(Command)) => (rgb(92, 84, 64), rgb(86, 78, 58)),
         Some(BoxKind::Room(Lounge)) => (rgb(84, 74, 70), rgb(78, 68, 64)),
         Some(BoxKind::Arena) => (rgb(36, 40, 58), rgb(32, 36, 52)),
+        Some(BoxKind::World) => (rgb(34, 46, 38), rgb(30, 42, 34)),
         None => (rgb(98, 98, 104), rgb(92, 92, 98)),
     }
 }
@@ -192,6 +193,7 @@ pub fn draw(fb: &mut Fb, v: &View) {
     draw_furniture(fb, v);
     draw_desks(fb, v);
     draw_arena(fb, v);
+    draw_world(fb, v);
     draw_agents(fb, v);
     draw_hud(fb, v);
 }
@@ -654,6 +656,46 @@ fn draw_arena(fb: &mut Fb, v: &View) {
             let s = format!("{:.1}", sc);
             fb.text(lx + LANE_W - 2 - text_w(&s), ly + LANE_H - 8, &s, CYAN);
         }
+    }
+}
+
+/// THE WORLD room (world/DESIGN.md §4): one tile grid, residents as small sprites,
+/// placed objects, a kill-switch banner. Reuses the Arena's lane-grid drawing style.
+fn draw_world(fb: &mut Fb, v: &View) {
+    let l = &v.world.layout;
+    let Some(room) = l.world() else { return };
+    let wr = &v.world.world;
+    let title = format!("{} - {} RESIDENT(S)", room.name, wr.residents.len());
+    fb.rect(room.x + 2, room.y + 1, room.w - 4, 10, WALL);
+    fb.text(room.x + 6, room.y + 4, &fit(&title.to_uppercase(), ((room.w - 12) / 4) as usize), YELLOW);
+    let (gx, gy) = l.world_origin();
+    fb.outline(gx - 1, gy - 1, WORLD_COLS * WORLD_CELL + 2, WORLD_ROWS * WORLD_CELL + 2, rgb(50, 70, 56));
+    for (ox, oy, spec) in &wr.objects {
+        let c = hex(&spec.color).unwrap_or(rgb(170, 170, 170));
+        fb.rect(gx + ox * WORLD_CELL, gy + oy * WORLD_CELL, WORLD_CELL - 1, WORLD_CELL - 1, c);
+    }
+    if wr.residents.is_empty() {
+        fb.text(room.x + room.w / 2 - 50, room.y + room.h / 2, "WAITING FOR RESIDENTS", DIM);
+    }
+    for r in &wr.residents {
+        let (px, py) = (gx + (r.x * WORLD_CELL as f32) as i32, gy + (r.y * WORLD_CELL as f32) as i32);
+        let hue = hash(&r.id);
+        let c = if r.awake {
+            rgb(120 + hue % 100, 170 + (hue / 100) % 70, 220)
+        } else {
+            shade(rgb(120 + hue % 100, 170 + (hue / 100) % 70, 220), 0.5)
+        };
+        fb.rect(px - 2, py - 2, 4, 4, c);
+        if !r.awake {
+            fb.text(px + 3, py - 7, "Z", DIM);
+        }
+        if v.selected == Some(r.id.as_str()) {
+            fb.outline(px - 3, py - 3, 6, 6, CYAN);
+        }
+    }
+    if let Some(reason) = &wr.killed {
+        fb.rect(room.x + 2, room.y + room.h - 11, room.w - 4, 9, RED);
+        fb.text(room.x + 4, room.y + room.h - 9, &fit(&format!("KILLED: {}", reason).to_uppercase(), ((room.w - 8) / 4) as usize), WHITE);
     }
 }
 

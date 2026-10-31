@@ -24,11 +24,21 @@ pub const GRID_X: i32 = 8;
 pub const GRID_Y: i32 = 22;
 pub const PILE_Y: f32 = 124.0;
 
+// WORLD room geometry, room-local coordinates (world/DESIGN.md §4): one tile grid,
+// drawn with the same lane-grid style the Arena uses, reference map size from
+// world/DESIGN.md §2 (32x32), scaled down to the viewer's tile size.
+pub const WORLD_COLS: i32 = 32;
+pub const WORLD_ROWS: i32 = 14;
+pub const WORLD_CELL: i32 = 8;
+pub const WORLD_TOP: i32 = 16;
+pub const WORLD_GRID_X: i32 = 8;
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BoxKind {
     Room(RoomKind),
     Arena,
+    World,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -62,6 +72,9 @@ impl RoomBox {
     }
     pub fn is_arena(&self) -> bool {
         self.kind == Some(BoxKind::Arena)
+    }
+    pub fn is_world(&self) -> bool {
+        self.kind == Some(BoxKind::World)
     }
 }
 
@@ -121,6 +134,20 @@ impl Layout {
         let slot = cfg.arena.slot.min(bottom.len());
         bottom.insert(slot, arena);
 
+        // WORLD room: beside the Arena (world/DESIGN.md §4), one tile-grid room,
+        // always present so residents are visible as soon as any join.
+        let world = RoomBox {
+            cfg: NO_CFG,
+            kind: Some(BoxKind::World),
+            name: "World".into(),
+            w: WORLD_GRID_X * 2 + WORLD_COLS * WORLD_CELL,
+            h: WORLD_TOP + WORLD_ROWS * WORLD_CELL + 10,
+            top: false,
+            cols: 0,
+            ..Default::default()
+        };
+        bottom.insert((slot + 1).min(bottom.len()), world);
+
         let width = |v: &Vec<RoomBox>| v.iter().map(|r| r.w).sum::<i32>();
         let w = 640.max(width(&top)).max(width(&bottom));
         let top_h = top.iter().map(|r| r.h).max().unwrap_or(0);
@@ -139,7 +166,7 @@ impl Layout {
                     r.w = w - x;
                 }
                 x += r.w;
-                r.door_x = if r.is_arena() { r.x + r.w / 2 } else if r.cols >= 2 { r.x + 53 } else { r.x + r.w - 24 };
+                r.door_x = if r.is_arena() || r.is_world() { r.x + r.w / 2 } else if r.cols >= 2 { r.x + 53 } else { r.x + r.w - 24 };
                 let (rx, ry) = (r.x, r.y);
                 for d in r.desks.iter_mut() {
                     *d = (rx + 10 + d.0 * DESK_PITCH_X, ry + DESK_TOP + d.1 * DESK_PITCH_Y);
@@ -168,6 +195,16 @@ impl Layout {
 
     pub fn arena(&self) -> Option<&RoomBox> {
         self.first_of(BoxKind::Arena)
+    }
+
+    pub fn world(&self) -> Option<&RoomBox> {
+        self.first_of(BoxKind::World)
+    }
+
+    /// Top-left of the WORLD tile grid, in world pixels.
+    pub fn world_origin(&self) -> (i32, i32) {
+        let w = self.world().map(|r| (r.x, r.y)).unwrap_or((0, 0));
+        (w.0 + WORLD_GRID_X, w.1 + WORLD_TOP)
     }
 
     pub fn desk(&self, cfg: usize, slot: usize) -> Option<(i32, i32)> {
