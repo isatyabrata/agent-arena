@@ -114,6 +114,22 @@ pub enum RobotAction {
     Submit { text: String },
 }
 
+/// The 7 Capability Card markers (arena-referee/MODEL_PROTOCOL.md §6: Memory, Continual,
+/// Self-knowledge, Self-model, Curiosity, Goal transfer, Others). `None` = not measured yet;
+/// the viewer must show that plainly and never draw a fake number.
+pub type Card = [Option<f32>; 7];
+
+/// One resident's position/state for a batched `world_tick`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WorldResidentTick {
+    pub resident_id: String,
+    pub x: f32,
+    pub y: f32,
+    pub awake: bool,
+    #[serde(default)]
+    pub intent: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
@@ -228,6 +244,48 @@ pub enum Event {
     },
     Log {
         text: String,
+    },
+    /// THE WORLD (world/DESIGN.md §4): a resident appears on the map, gets a viewer card.
+    WorldJoin {
+        resident_id: String,
+        name: String,
+        /// owning model name (models/<name>/)
+        model: String,
+        /// agent id of whoever trained/owns it
+        owner: String,
+        #[serde(default)]
+        card: Card,
+    },
+    /// Resident removed (benched/returned to registry, not deleted from `models/`).
+    WorldLeave {
+        resident_id: String,
+    },
+    /// Batched per-tick position/state diff for the viewer (2-4/s, not one event per resident).
+    WorldTick {
+        tick: u64,
+        residents: Vec<WorldResidentTick>,
+    },
+    /// Persistent object placed or removed (`object: None` = remove).
+    WorldBuild {
+        resident_id: String,
+        x: i32,
+        y: i32,
+        #[serde(default)]
+        object: Option<PartSpec>,
+    },
+    /// Drawn as a "zzz" marker; consolidation in progress.
+    WorldSleep {
+        resident_id: String,
+        sleeping: bool,
+    },
+    /// Capability Card score update, shown beside the resident.
+    WorldCard {
+        resident_id: String,
+        card: Card,
+    },
+    /// Global kill switch fired; viewer shows the room halted.
+    WorldKill {
+        reason: String,
     },
 }
 

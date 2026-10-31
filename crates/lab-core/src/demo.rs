@@ -5,6 +5,7 @@
 
 use crate::config::TaskCfg;
 use crate::event::*;
+use crate::layout::{WORLD_COLS, WORLD_ROWS};
 use crate::rng::Rng;
 use crate::world::World;
 use std::collections::BTreeMap;
@@ -53,6 +54,9 @@ pub struct DemoFeed {
     plans: Vec<Plan>,
     first_finish: Option<f32>,
     round: u32,
+    world_joined: bool,
+    world_tick: u64,
+    world_timer: f32,
 }
 
 const ARCH: &[&str] = &["ember-mesh", "tidal-loom", "lattice-weave", "quasar-drift", "helix-bloom", "myco-shard", "aurora-kernel", "cinder-forge"];
@@ -92,6 +96,9 @@ impl DemoFeed {
             plans: vec![],
             first_finish: None,
             round: 0,
+            world_joined: false,
+            world_tick: 0,
+            world_timer: 0.0,
         }
     }
 
@@ -245,6 +252,7 @@ impl DemoFeed {
                 }
             }
         }
+        self.world_step(w, dt, &mut ev);
         if self.cycle != Cycle::Boot {
             self.ambient(w, dt, &mut ev);
         }
@@ -458,6 +466,62 @@ impl DemoFeed {
             let note = scores.first().map(|(i, s)| format!("{} scored {:.1}", a.robots[*i].name, s)).unwrap_or_default();
             ev.push(Event::ArenaEnd { ranking: scores.iter().map(|x| x.0).collect(), note });
             self.enter(Cycle::Review);
+        }
+    }
+
+    /// THE WORLD (world/DESIGN.md §4): 2 stub residents wander the tile grid; real models
+    /// arrive at M4. Ticks are batched at ~2.5-4/s, never one event per resident.
+    fn world_step(&mut self, w: &World, dt: f32, ev: &mut Vec<Event>) {
+        if !self.world_joined {
+            self.world_joined = true;
+            for (id, name, model) in [("res1", "Pip", "stub-explorer"), ("res2", "Mochi", "stub-builder")] {
+                if w.world.residents.iter().any(|r| r.id == id) {
+                    continue;
+                }
+                ev.push(Event::WorldJoin {
+                    resident_id: id.into(),
+                    name: name.into(),
+                    model: model.into(),
+                    owner: "demo".into(),
+                    card: [None; 7],
+                });
+            }
+        }
+        self.world_timer -= dt;
+        if self.world_timer > 0.0 {
+            return;
+        }
+        self.world_timer = self.rng.between(0.25, 0.4);
+        self.world_tick += 1;
+        let intents = ["exploring", "wandering", "resting", "looking around", "thinking"];
+        let residents: Vec<WorldResidentTick> = w
+            .world
+            .residents
+            .iter()
+            .map(|r| {
+                let (mut x, mut y) = (r.x, r.y);
+                if x == 0.0 && y == 0.0 {
+                    x = self.rng.between(2.0, WORLD_COLS as f32 - 2.0);
+                    y = self.rng.between(2.0, WORLD_ROWS as f32 - 2.0);
+                }
+                x = (x + self.rng.between(-1.2, 1.2)).clamp(1.0, WORLD_COLS as f32 - 1.0);
+                y = (y + self.rng.between(-1.2, 1.2)).clamp(1.0, WORLD_ROWS as f32 - 1.0);
+                let intent = *self.rng.pick(&intents);
+                WorldResidentTick { resident_id: r.id.clone(), x, y, awake: r.awake, intent: intent.into() }
+            })
+            .collect();
+        if !residents.is_empty() {
+            ev.push(Event::WorldTick { tick: self.world_tick, residents });
+        }
+        if self.world_tick % 40 == 0 {
+            if let Some(r) = w.world.residents.first() {
+                ev.push(Event::WorldBuild {
+                    resident_id: r.id.clone(),
+                    x: r.x as i32,
+                    y: r.y as i32,
+                    object: Some(PartSpec { name: "marker".into(), color: "#f2d05a".into(), glyph: None }),
+                });
+            }
         }
     }
 
